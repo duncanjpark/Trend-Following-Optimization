@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+
+
 from backtesting.test import SMA
 from backtesting.lib import SignalStrategy
 import pandas as pd
@@ -8,7 +11,7 @@ class SmaCross(SignalStrategy):
     n2 = 25
 
     def init(self):
-        super.init()
+        super().init()
 
         sma1 = self.I(SMA, self.data.Close, self.n1)
         sma2 = self.I(SMA, self.data.Close, self.n2)
@@ -20,4 +23,3 @@ class SmaCross(SignalStrategy):
 
         self.set_signal(entry_size=entry_size)
 
-        
