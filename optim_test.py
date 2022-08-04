@@ -13,7 +13,7 @@ start_date = '2010-11-01'
 
 
 
-pdf = bt.get('aapl,msft,c,ge,gs,gold,spy', start=start_date)
+pdf = bt.get('aapl,msft,c,ge,gold,spy', start=start_date)
 pdf = pdf.pct_change(1) # 1 for ONE DAY lookback
 pdf = pdf.dropna()
 
@@ -143,5 +143,31 @@ def plot_efrontier(ret_df, df,
                     )
         
 plot_efrontier(ret_df, pdf)
+
+# stacked area chart of weights vs. returns
+# for given vol constraint and corresponding real return, show portfolio weights
+def transition_map(ret_df, labels, startyear, endyear):
+    
+    x = ret_df['return']
+    # absolute values so shorts don't create chaos
+    y_list = [abs(ret_df[l]) for l in labels]
+    pal = ['red', 'lightgreen', 'darkgreen', 'navy', 'gold', 'cyan']
+    
+    fig = plt.figure(figsize=(8, 4.5))
+    ax1 = fig.add_subplot(111)
+
+    ax1.stackplot(x, y_list, labels=labels, colors=pal)
+    ax1.set_xlabel("Portfolio Real Return")
+    ax1.set_ylabel("Portfolio Weight")
+    ax1.legend(loc='lower right')
+    ax2 = ax1.twiny()
+    ax2.set_xlim((ret_df['std'].iloc[0], ret_df['std'].iloc[-1]))
+    ax2.set_xlabel('Portfolio Vol')
+    
+    
+    plt.title("Optimal Portfolio Transition Map")
+
+transition_map(ret_df, labels=pdf.columns, startyear=pdf.index[0], endyear=pdf.index[-1])
+
 
 plt.show()
