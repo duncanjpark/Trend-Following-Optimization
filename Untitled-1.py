@@ -9,10 +9,10 @@ import matplotlib.pyplot as plt
 from Algo_Helpers import Signal, WeighFromSignal, Rebalance
 matplotlib.use( 'tkagg' )
 
-start_date = '2010-11-01'
+start_date = '2018-11-01'
 
 
-pdf = bt.get('aapl,msft,c,ge,gs', start=start_date)
+pdf = bt.get('aapl,msft,c,ge,gs, nvda, dis, jnj, ibm, mrk, pg, rtx, csco', start=start_date)
 
 
 
@@ -70,7 +70,6 @@ rdf.groupby((rdf['label'].shift() * rdf['label'] < 0).cumsum()).apply(plot_func)
 
 plt.show()
 
-#fig.savefig('demo.png', bbox_inches='tight')
 
 
 

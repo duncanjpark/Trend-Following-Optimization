@@ -2,10 +2,85 @@ import pandas as pd
 from IPython.display import display
 import bt
 import numpy as np
+import cvxpy as cp
 
 import matplotlib.pyplot as plt
 
 
+def solve_weights(rdf, max_vol):
+    labels = list(rdf.columns)
+    Sigma = np.cov(rdf.transpose())
+    n = Sigma.shape[0]
+    mu = rdf.mean().values
+    asset_vols = np.sqrt(Sigma.diagonal())
+    w = cp.Variable(n)
+    ret = mu.T @ w
+    vol = cp.quad_form(w, Sigma)
+    z = pd.DataFrame([mu, asset_vols], columns=labels)
+    z['rows'] = ['real return', 'vol']
+    z.set_index('rows')
+    prob = cp.Problem(cp.Maximize(ret),
+                  [cp.sum(w) == 1, 
+                   w >= 0,
+                   vol <= max_vol   # new constraint: vol <= vol_limit parameter
+                  ]
+                 )
+
+
+    #vol_limit.value = vl_val
+    result = prob.solve()
+    return w.value
+"""
+    prob = cp.Problem(cp.Minimize(vol),
+        [cp.sum(w) == 1,
+        w >= 0]
+        )
+
+    prob.solve()
+    wts = [float('%0.4f' % v) for v in w.value]
+    minvol = vol.value
+
+    pd.DataFrame([wts], columns=labels)
+
+    prob = cp.Problem(cp.Maximize(ret),  # maximize return
+            [cp.sum(w) == 1, 
+            w >= 0]
+            )
+
+    prob.solve()
+    wts = [float('%0.4f' % v) for v in w.value]
+    maxretvol = vol.value
+
+    vol_limit = cp.Parameter(nonneg=True)
+
+    # define function so we can solve many in parallel
+    def solve_vl(vl_val):
+        vol_limit.value = vl_val
+        result = prob.solve()
+        return (ret.value, np.sqrt(vol.value), w.value)
+
+    # number of points on the frontier
+    NPOINTS = 200
+    vl_vals = np.linspace(minvol, maxretvol, NPOINTS)
+
+    # iterate in-process
+    results_dict = {}
+    for vl_val in vl_vals:
+        # print(datetime.strftime(datetime.now(), "%H:%M:%S"), vl_val)
+        results_dict[vl_val] = solve_vl(vl_val)
+
+    ret_df = pd.DataFrame(enumerate(results_dict.keys()))
+    ret_df.columns=['i', 'vol']
+    ret_df['return'] = [results_dict[v][0] for v in ret_df['vol']]
+    ret_df['std'] = [results_dict[v][1] for v in ret_df['vol']]
+    for i, colname in enumerate(labels):
+        ret_df[colname]=[results_dict[v][2][i] for v in ret_df['vol']]
+
+    x = ret_df['return']
+    # absolute values so shorts don't create chaos
+    y_list = [abs(ret_df[l]) for l in labels]
+"""
+    #return ret_df
 
 class Signal(bt.Algo):
 
@@ -17,27 +92,10 @@ class Signal(bt.Algo):
         self.lag = lag
 
     def __call__(self, target):
-        """
-        selected = 'aapl'
-        t0 = target.now - self.lag
 
-        if target.universe[selected].index[0] > t0:
-            return False
-        prc = target.universe[selected].loc[t0 - self.lookback:t0]
-
-
-        trend = prc.iloc[-1]/prc.iloc[0] - 1
-        signal = trend > 0.
-
-        if signal:
-            target.temp['Signal'] = 1
-        else:
-            target.temp['Signal'] = 0
-        """
-        #display("here")
 
         target.temp['Signal'] = {}
-
+    
         for selected in target.perm['tickers']:
 
             t0 = target.now - self.lag
@@ -49,15 +107,30 @@ class Signal(bt.Algo):
             trend = prc.iloc[-1]/prc.iloc[0] - 1
             signal = trend > 0.
 
-            #display("sig: " + selected)
-
-            #target.temp['Signal'] = {selected: 0}
 
             if signal:
                 target.temp['Signal'][selected] = .2
             else:
                 target.temp['Signal'][selected] = 0
 
+        signaled_tickers = [l for l in target.temp['Signal'] if target.temp['Signal'][l] != 0]
+        rdf = target.universe.loc[:target.now - self.lag - self.lookback,signaled_tickers]
+        rdf = rdf.pct_change(1) # 1 for ONE DAY lookback
+        rdf = rdf.dropna()
+
+        for selected in target.perm['tickers']:
+            target.temp['Signal'][selected] = 0
+
+        if len(rdf.index) > 10 and len(signaled_tickers) > 1:
+            max_vol = 0.0007
+            optimal_info = solve_weights(rdf, max_vol)
+            for count, selected in enumerate(signaled_tickers):
+                target.temp['Signal'][selected] = optimal_info[count]
+
+
+        
+
+        
         return True
 
 
@@ -69,15 +142,7 @@ class WeighFromSignal(bt.Algo):
         super(WeighFromSignal, self).__init__()
 
     def __call__(self, target):
-        """selected = 'aapl'
-        if target.temp['Signal'] is None:
-            raise(Exception('No Signal!'))
 
-        target.temp['weights'] = {selected : target.temp['Signal']}
-        return True"""
-        #display(target.temp.items())
-
-        #target.temp['weights'] = {'aapl': target.temp['Signal']['aapl']}
         target.temp['weights'] = {}
         for selected in target.perm['tickers']:
             if target.temp['Signal'][selected] is None:
@@ -85,7 +150,6 @@ class WeighFromSignal(bt.Algo):
 
             target.temp['weights'][selected] = target.temp['Signal'][selected]
 
-        #target.temp['cash'] = 0.4
         return True
 
 class Rebalance(bt.Algo):
@@ -139,7 +203,6 @@ class Rebalance(bt.Algo):
         
 
         for item in targets.items():
-            #display(base)
             target.rebalance(item[1], child=item[0], base=base, update=False)
 
         # Now update

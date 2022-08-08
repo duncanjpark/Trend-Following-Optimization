@@ -146,7 +146,7 @@ plot_efrontier(ret_df, pdf)
 
 # stacked area chart of weights vs. returns
 # for given vol constraint and corresponding real return, show portfolio weights
-def transition_map(ret_df, labels, startyear, endyear):
+def transition_map(ret_df, labels):
     
     x = ret_df['return']
     # absolute values so shorts don't create chaos
@@ -167,7 +167,6 @@ def transition_map(ret_df, labels, startyear, endyear):
     
     plt.title("Optimal Portfolio Transition Map")
 
-transition_map(ret_df, labels=pdf.columns, startyear=pdf.index[0], endyear=pdf.index[-1])
-
+transition_map(ret_df, labels=pdf.columns)
 
 plt.show()
