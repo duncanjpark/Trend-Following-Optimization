@@ -7,40 +7,21 @@ import cvxpy as cp
 import matplotlib.pyplot as plt
 
 
-def solve_weights(rdf, max_vol):
-    labels = list(rdf.columns)
+def solve_weights(rdf):
     Sigma = np.cov(rdf.transpose())
     n = Sigma.shape[0]
     mu = rdf.mean().values
-    asset_vols = np.sqrt(Sigma.diagonal())
     w = cp.Variable(n)
     ret = mu.T @ w
     vol = cp.quad_form(w, Sigma)
-    z = pd.DataFrame([mu, asset_vols], columns=labels)
-    z['rows'] = ['real return', 'vol']
-    z.set_index('rows')
-    prob = cp.Problem(cp.Maximize(ret),
-                  [cp.sum(w) == 1, 
-                   w >= 0,
-                   vol <= max_vol   # new constraint: vol <= vol_limit parameter
-                  ]
-                 )
-
-
-    #vol_limit.value = vl_val
-    result = prob.solve()
-    return w.value
-"""
+    
     prob = cp.Problem(cp.Minimize(vol),
         [cp.sum(w) == 1,
         w >= 0]
         )
 
     prob.solve()
-    wts = [float('%0.4f' % v) for v in w.value]
     minvol = vol.value
-
-    pd.DataFrame([wts], columns=labels)
 
     prob = cp.Problem(cp.Maximize(ret),  # maximize return
             [cp.sum(w) == 1, 
@@ -48,89 +29,74 @@ def solve_weights(rdf, max_vol):
             )
 
     prob.solve()
-    wts = [float('%0.4f' % v) for v in w.value]
     maxretvol = vol.value
 
-    vol_limit = cp.Parameter(nonneg=True)
+    max_vol = (maxretvol + minvol) / 2 
+    prob = cp.Problem(cp.Maximize(ret),
+                  [cp.sum(w) == 1, 
+                   w >= 0,
+                   vol <= max_vol   # new constraint: vol <= vol_limit parameter
+                  ]
+                 )
 
-    # define function so we can solve many in parallel
-    def solve_vl(vl_val):
-        vol_limit.value = vl_val
-        result = prob.solve()
-        return (ret.value, np.sqrt(vol.value), w.value)
+    result = prob.solve()
+    return w.value
 
-    # number of points on the frontier
-    NPOINTS = 200
-    vl_vals = np.linspace(minvol, maxretvol, NPOINTS)
-
-    # iterate in-process
-    results_dict = {}
-    for vl_val in vl_vals:
-        # print(datetime.strftime(datetime.now(), "%H:%M:%S"), vl_val)
-        results_dict[vl_val] = solve_vl(vl_val)
-
-    ret_df = pd.DataFrame(enumerate(results_dict.keys()))
-    ret_df.columns=['i', 'vol']
-    ret_df['return'] = [results_dict[v][0] for v in ret_df['vol']]
-    ret_df['std'] = [results_dict[v][1] for v in ret_df['vol']]
-    for i, colname in enumerate(labels):
-        ret_df[colname]=[results_dict[v][2][i] for v in ret_df['vol']]
-
-    x = ret_df['return']
-    # absolute values so shorts don't create chaos
-    y_list = [abs(ret_df[l]) for l in labels]
-"""
-    #return ret_df
 
 class Signal(bt.Algo):
 
 
-    def __init__(self, lookback=pd.DateOffset(months=3),
-                 lag=pd.DateOffset(days=0)):
+    def __init__(self, lookback_months=3,
+                 lag_days=1):
         super(Signal, self).__init__()
-        self.lookback = lookback
-        self.lag = lag
+        self.lookback_months = lookback_months
+        self.lag_days = lag_days
+        self.lookback = pd.DateOffset(months=lookback_months)
+        self.lag = pd.DateOffset(days=lag_days)
 
     def __call__(self, target):
-
-
         target.temp['Signal'] = {}
-    
-        for selected in target.perm['tickers']:
-
-            t0 = target.now - self.lag
+        t0 = target.now - self.lag
+        """for selected in target.perm['tickers']:
 
             if target.universe[selected].index[0] > t0:
                 return False
             prc = target.universe[selected].loc[t0 - self.lookback:t0]
 
+            sma  = prc.rolling(window=21*12,center=False).median().shift(self.lag_days)
+
             trend = prc.iloc[-1]/prc.iloc[0] - 1
             signal = trend > 0.
 
-
             if signal:
-                target.temp['Signal'][selected] = .2
+                target.temp['Signal'][selected] = 1
             else:
                 target.temp['Signal'][selected] = 0
+"""
+        
+        prc = target.universe.loc[t0 - self.lookback:t0, :]
 
-        signaled_tickers = [l for l in target.temp['Signal'] if target.temp['Signal'][l] != 0]
-        rdf = target.universe.loc[:target.now - self.lag - self.lookback,signaled_tickers]
-        rdf = rdf.pct_change(1) # 1 for ONE DAY lookback
-        rdf = rdf.dropna()
+        #sma  = prc.rolling(window=21*self.lookback_months,center=False).median().shift(self.lag_days)
+        sma  = prc.rolling(window=21*1,center=False).median().shift(self.lag_days)
+        
+        for selected in target.perm['tickers']:
+            target.temp['Signal'][selected] = prc.iloc[-1][selected] > sma.iloc[-1][selected] 
+
+
+        signaled_tickers = [l for l in target.temp['Signal'] if target.temp['Signal'][l] == True]
+        #rdf = target.universe.loc[:target.now - self.lag - self.lookback,signaled_tickers].pct_change(1).dropna()
+        rdf = target.universe.loc[: target.now,signaled_tickers].pct_change(1).dropna()
 
         for selected in target.perm['tickers']:
+            if target.universe[selected].index[0] > t0:
+                return False
             target.temp['Signal'][selected] = 0
 
-        if len(rdf.index) > 10 and len(signaled_tickers) > 1:
-            max_vol = 0.0007
-            optimal_info = solve_weights(rdf, max_vol)
+        if len(rdf.index) > (self.lookback_months * 21) and len(signaled_tickers) > 1:
+            optimal_weights = solve_weights(rdf)
             for count, selected in enumerate(signaled_tickers):
-                target.temp['Signal'][selected] = optimal_info[count]
+                target.temp['Signal'][selected] = optimal_weights[count]
 
-
-        
-
-        
         return True
 
 
