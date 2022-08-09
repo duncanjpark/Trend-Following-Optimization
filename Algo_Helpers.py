@@ -1,13 +1,14 @@
+import re
+from tabnanny import verbose
 import pandas as pd
 from IPython.display import display
 import bt
 import numpy as np
 import cvxpy as cp
 
-import matplotlib.pyplot as plt
 
 
-def solve_weights(rdf):
+def solve_weights(rdf, signals):
     Sigma = np.cov(rdf.transpose())
     n = Sigma.shape[0]
     mu = rdf.mean().values
@@ -20,7 +21,10 @@ def solve_weights(rdf):
         w >= 0]
         )
 
-    prob.solve()
+    try:
+        result = prob.solve()
+    except UserWarning:
+        prob.solve(verbose=True)
     minvol = vol.value
 
     prob = cp.Problem(cp.Maximize(ret),  # maximize return
@@ -28,18 +32,23 @@ def solve_weights(rdf):
             w >= 0]
             )
 
-    prob.solve()
+    try:
+        result = prob.solve()
+    except UserWarning:
+        prob.solve(verbose=True)
     maxretvol = vol.value
 
     max_vol = (maxretvol + minvol) / 2 
     prob = cp.Problem(cp.Maximize(ret),
-                  [cp.sum(w) == 1, 
-                   w >= 0,
-                   vol <= max_vol   # new constraint: vol <= vol_limit parameter
-                  ]
+                  [cp.norm1(w) <= 1.5,  # 1-norm <= 1.5, i.e. gross exposure < 150%
+                   cp.sum(w) == 1,
+                   vol <= max_vol]
                  )
 
-    result = prob.solve()
+    try:
+        result = prob.solve()
+    except UserWarning:
+        prob.solve(verbose=True)
     return w.value
 
 
@@ -56,53 +65,40 @@ class Signal(bt.Algo):
 
     def __call__(self, target):
         target.temp['Signal'] = {}
-        t0 = target.now - self.lag
-        """for selected in target.perm['tickers']:
+        if target.universe.index[0] > (target.now - self.lookback):
+            return False
+    
+        prc = target.universe.loc[ target.now - self.lookback : , : ]
 
-            if target.universe[selected].index[0] > t0:
-                return False
-            prc = target.universe[selected].loc[t0 - self.lookback:t0]
-
-            sma  = prc.rolling(window=21*12,center=False).median().shift(self.lag_days)
-
-            trend = prc.iloc[-1]/prc.iloc[0] - 1
-            signal = trend > 0.
-
-            if signal:
-                target.temp['Signal'][selected] = 1
-            else:
+        sma  = prc.rolling(window=21*self.lookback_months,center=False).median().shift(self.lag_days)
+        
+        for selected in target.perm['tickers']:
+            target.temp['Signal'][selected] = prc.iloc[-1][selected] / sma.iloc[-1][selected] - 1
+            if np.isnan(target.temp['Signal'][selected]):
                 target.temp['Signal'][selected] = 0
-"""
-        
-        prc = target.universe.loc[t0 - self.lookback:t0, :]
+        best_signals = {k: v for k, v in sorted(target.temp['Signal'].items(), key = lambda item: item[1], reverse=True) }
 
-        #sma  = prc.rolling(window=21*self.lookback_months,center=False).median().shift(self.lag_days)
-        sma  = prc.rolling(window=21*1,center=False).median().shift(self.lag_days)
-        
-        for selected in target.perm['tickers']:
-            target.temp['Signal'][selected] = prc.iloc[-1][selected] > sma.iloc[-1][selected] 
+        #signaled_tickers = [l for l in target.temp['Signal'] if abs(target.temp['Signal'][l]) > 0.003 ]
+        signaled_tickers = [ l for l in best_signals.keys()][:int(len(best_signals.keys()) / 2)]
+        rdf = target.universe.loc[target.now - self.lookback : target.now , signaled_tickers].pct_change(1).dropna()
 
+        if  len(signaled_tickers) > 1:
+            optimal_weights = solve_weights(rdf, target.temp['Signal'])
+    
 
-        signaled_tickers = [l for l in target.temp['Signal'] if target.temp['Signal'][l] == True]
-        #rdf = target.universe.loc[:target.now - self.lag - self.lookback,signaled_tickers].pct_change(1).dropna()
-        rdf = target.universe.loc[: target.now,signaled_tickers].pct_change(1).dropna()
-
-        for selected in target.perm['tickers']:
-            if target.universe[selected].index[0] > t0:
-                return False
-            target.temp['Signal'][selected] = 0
-
-        if len(rdf.index) > (self.lookback_months * 21) and len(signaled_tickers) > 1:
-            optimal_weights = solve_weights(rdf)
-            for count, selected in enumerate(signaled_tickers):
-                target.temp['Signal'][selected] = optimal_weights[count]
+        if len(signaled_tickers) > 1:
+            for count, ticker in enumerate(signaled_tickers):
+                if (optimal_weights[count] * target.temp['Signal'][ticker]) > 0: #if same direction
+                    target.temp['Signal'][ticker] = optimal_weights[count]
+            for ticker in target.perm['tickers']:
+                if ticker not in signaled_tickers:
+                    target.temp['Signal'][ticker] = 0
 
         return True
 
 
 
 class WeighFromSignal(bt.Algo):
-
 
     def __init__(self):
         super(WeighFromSignal, self).__init__()

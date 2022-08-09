@@ -9,10 +9,12 @@ import matplotlib.pyplot as plt
 from Algo_Helpers import Signal, WeighFromSignal, Rebalance
 matplotlib.use( 'tkagg' )
 
-start_date = '2018-11-01'
-pdf = bt.get('aapl,msft,c,ge,gs, nvda, dis, jnj, ibm, mrk, pg, rtx, csco', start=start_date)
+
 lookback_months = 2
 lag_days = 1
+
+pdf = pd.read_pickle(r'./pdf.pkl')
+
 
 runMonthlyAlgo = bt.algos.RunWeekly()
 rebalAlgo = Rebalance()
@@ -46,17 +48,25 @@ tmt = res.get_security_weights()['aapl']
 tmt = tmt.rename("weight")
 tmt = tmt.drop(tmt.index[0])
 rdf = pd.concat([df, tmt], axis=1)
-rdf['label'] = np.where(rdf['weight'] == 0, -1, 1)
+rdf['label'] = np.where(rdf['weight'] == 0, 0, np.where(rdf['weight'] < 0, -1, 1))
 fig, ax = plt.subplots()
 fig.set_size_inches(10,8)
 def plot_func(group):
     global ax
-    color = 'r' if (group['label'] < 0).all() else 'g'
+    #color = 'r' if (group['label'] < 0).all() else 'g' if (group['label'] > 0).all() else 'y'
     lw = 1
+    if (group.label ==-1).all() :
+        color = 'r'
+    elif (group.label == 1).all() :
+        color ='g'
+    elif (group.label == 0).all() :
+        color='y'
+    
     ax.plot(group.index, group.aapl, c=color, linewidth=lw)
 
 
-rdf.groupby((rdf['label'].shift() * rdf['label'] < 0).cumsum()).apply(plot_func)
+
+rdf.groupby((rdf['label'].shift() != rdf['label']).cumsum()).apply(plot_func)
 
 plt.show()
 
