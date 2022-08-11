@@ -10,13 +10,12 @@ from Algo_Helpers import Signal, WeighFromSignal, Rebalance
 matplotlib.use( 'tkagg' )
 
 
-lookback_months = 2
-lag_days = 1
+lookback_months = 2     #for trend signal
+lag_days = 1            #trend lag
 
 pdf = pd.read_pickle(r'./pdf.pkl')
 
-
-runMonthlyAlgo = bt.algos.RunWeekly()
+runWeeklyAlgo = bt.algos.RunWeekly()
 rebalAlgo = Rebalance()
 
 signalAlgo = Signal(lookback_months, lag_days)
@@ -26,7 +25,7 @@ weighFromSignalAlgo = WeighFromSignal()
 s = bt.Strategy(
     'Trend Following with Mean Variance Optimization',
     [
-        runMonthlyAlgo,
+        runWeeklyAlgo,
         signalAlgo,
         weighFromSignalAlgo,
         rebalAlgo
@@ -53,7 +52,6 @@ fig, ax = plt.subplots()
 fig.set_size_inches(10,8)
 def plot_func(group):
     global ax
-    #color = 'r' if (group['label'] < 0).all() else 'g' if (group['label'] > 0).all() else 'y'
     lw = 1
     if (group.label ==-1).all() :
         color = 'r'
@@ -65,7 +63,6 @@ def plot_func(group):
     ax.plot(group.index, group.aapl, c=color, linewidth=lw)
 
 
-
 rdf.groupby((rdf['label'].shift() != rdf['label']).cumsum()).apply(plot_func)
 
 plt.show()
@@ -73,6 +70,4 @@ plt.show()
 
 
 display(res.stats)
-
-
 

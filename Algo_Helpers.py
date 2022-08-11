@@ -9,51 +9,59 @@ import cvxpy as cp
 
 
 def solve_weights(rdf, signals):
+    # compute covariance matrix (df being the dataframe of historical returns)
     Sigma = np.cov(rdf.transpose())
+    # number of assets
     n = Sigma.shape[0]
+    # average returns
     mu = rdf.mean().values
+    # asset SDs
+    asset_vols = np.sqrt(Sigma.diagonal())
+    # variable to optimize over - portfolio weights
     w = cp.Variable(n)
-    ret = mu.T @ w
+    # objectives to optimize
+    # portfolio return
+    ret = mu.T @ w 
+    # volatility
     vol = cp.quad_form(w, Sigma)
     
-    prob = cp.Problem(cp.Minimize(vol),
-        [cp.sum(w) == 1,
-        w >= 0]
+    prob = cp.Problem(cp.Minimize(vol), # minimize volatility
+        [#cp.norm1(w) <= 1.5,            # 1-norm <= 1.5, i.e. gross exposure < 150%
+            cp.sum(w) == 1,              # sum of weights = 1
+            w <= 0.25,
+            w >= -.25
+        ]
         )
 
-    try:
-        result = prob.solve()
-    except UserWarning:
-        prob.solve(verbose=True)
+    prob.solve()
     minvol = vol.value
 
     prob = cp.Problem(cp.Maximize(ret),  # maximize return
-            [cp.sum(w) == 1, 
-            w >= 0]
+            [#cp.norm1(w) <= 1.5,         # 1-norm <= 1.5, i.e. gross exposure < 150%
+            cp.sum(w) == 1,               # sum of weights = 1
+            w >= -.25,
+            w <= 0.25
+            ]
             )
 
-    try:
-        result = prob.solve()
-    except UserWarning:
-        prob.solve(verbose=True)
+    prob.solve()
     maxretvol = vol.value
 
-    max_vol = (maxretvol + minvol) / 2 
-    prob = cp.Problem(cp.Maximize(ret),
+    max_vol = maxretvol * .5 + minvol * .5  #middle point between minimum vol and maximum for returns
+
+    prob = cp.Problem(cp.Maximize(ret), #maximize returns
                   [cp.norm1(w) <= 1.5,  # 1-norm <= 1.5, i.e. gross exposure < 150%
-                   cp.sum(w) == 1,
-                   vol <= max_vol]
+                   cp.sum(w) == 1,      # sum of weights = 1
+                   vol <= max_vol,      # use vol limit
+                   w <= 0.25
+                   ]
                  )
 
-    try:
-        result = prob.solve()
-    except UserWarning:
-        prob.solve(verbose=True)
+
     return w.value
 
 
 class Signal(bt.Algo):
-
 
     def __init__(self, lookback_months=3,
                  lag_days=1):
@@ -65,37 +73,41 @@ class Signal(bt.Algo):
 
     def __call__(self, target):
         target.temp['Signal'] = {}
+        # check that enough time has passed to look back
         if target.universe.index[0] > (target.now - self.lookback):
             return False
     
+        #prices
         prc = target.universe.loc[ target.now - self.lookback : , : ]
-
+        #SMA of prices with lag
         sma  = prc.rolling(window=21*self.lookback_months,center=False).median().shift(self.lag_days)
         
+        #Set Signal to % difference of current vs lagged SMA
         for selected in target.perm['tickers']:
             target.temp['Signal'][selected] = prc.iloc[-1][selected] / sma.iloc[-1][selected] - 1
             if np.isnan(target.temp['Signal'][selected]):
                 target.temp['Signal'][selected] = 0
-        best_signals = {k: v for k, v in sorted(target.temp['Signal'].items(), key = lambda item: item[1], reverse=True) }
 
-        #signaled_tickers = [l for l in target.temp['Signal'] if abs(target.temp['Signal'][l]) > 0.003 ]
-        signaled_tickers = [ l for l in best_signals.keys()][:int(len(best_signals.keys()) / 2)]
+        #sort the signals by this % change
+        best_signals = {k: v for k, v in sorted(target.temp['Signal'].items(), key = lambda item: abs(item[1]), reverse=True) }
+        #the tickers of these signals
+        signaled_tickers = [ l for l in best_signals.keys()][:int(len(best_signals.keys()) * .25)]
+        #daily returns of these signals in look back period
         rdf = target.universe.loc[target.now - self.lookback : target.now , signaled_tickers].pct_change(1).dropna()
+        #rdf = target.universe.loc[ : target.now , signaled_tickers].pct_change(1).dropna()
 
         if  len(signaled_tickers) > 1:
+            #Get the weightings of these tickers based off convex variance optimization 
             optimal_weights = solve_weights(rdf, target.temp['Signal'])
-    
 
-        if len(signaled_tickers) > 1:
             for count, ticker in enumerate(signaled_tickers):
-                if (optimal_weights[count] * target.temp['Signal'][ticker]) > 0: #if same direction
-                    target.temp['Signal'][ticker] = optimal_weights[count]
+                #if (optimal_weights[count] * target.temp['Signal'][ticker]) > 0: #if both optimization and trend agree long or short
+                target.temp['Signal'][ticker] = optimal_weights[count]       #then set weight of portfolio to that weight
             for ticker in target.perm['tickers']:
                 if ticker not in signaled_tickers:
-                    target.temp['Signal'][ticker] = 0
+                    target.temp['Signal'][ticker] = 0                            #otherwise, liquidate holding / don't trade
 
         return True
-
 
 
 class WeighFromSignal(bt.Algo):
@@ -120,8 +132,6 @@ class Rebalance(bt.Algo):
         super(Rebalance, self).__init__()
 
     def __call__(self, target):
-
-
         if "weights" not in target.temp:
             return True
 
@@ -162,8 +172,6 @@ class Rebalance(bt.Algo):
             base = base * (1 - target.temp["cash"])
 
         # Turn off updating while we rebalance each child
-        
-
         for item in targets.items():
             target.rebalance(item[1], child=item[0], base=base, update=False)
 

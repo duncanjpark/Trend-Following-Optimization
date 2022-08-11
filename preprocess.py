@@ -1,11 +1,9 @@
-#from warnings import simplefilter
 import requests
 import re
-#simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 import bt
 import pandas as pd
 
-num_initial_tickers = 30
+num_initial_tickers = 100
 etf_key = 'SPY'
 headers = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)"
